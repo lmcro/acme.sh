@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-VER=2.1.0
+#!/usr/bin/env sh
+VER=2.2.0
 
 PROJECT_NAME="acme.sh"
 
@@ -50,19 +50,35 @@ _debug() {
 }
 
 _debug2() {
-  if [[ "$DEBUG" -ge "2" ]] ; then
+  if [[ "$DEBUG" ]] && [[ "$DEBUG" -ge "2" ]] ; then
     _debug "$@"
   fi
   return
 }
 
-_exists() {
+_startswith(){
+  _str="$1"
+  _sub="$2"
+  echo $_str | grep ^$_sub >/dev/null 2>&1
+}
+
+_contains(){
+  _str="$1"
+  _sub="$2"
+  echo $_str | grep $_sub >/dev/null 2>&1
+}
+
+_exists(){
   cmd="$1"
   if [[ -z "$cmd" ]] ; then
     _err "Usage: _exists cmd"
     return 1
   fi
-  command -v $cmd >/dev/null 2>&1
+  if type command >/dev/null 2>&1 ; then
+    command -v $cmd >/dev/null 2>&1
+  else
+    type $cmd >/dev/null 2>&1
+  fi
   ret="$?"
   _debug2 "$cmd exists=$ret"
   return $ret
@@ -246,12 +262,13 @@ createAccountKey() {
   
   account=$1
   length=$2
-  
-  if [[ "$length" == "ec-"* ]] ; then
+  _debug account "$account"
+  _debug length "$length"
+  if _startswith "$length" "ec-" ; then
     length=2048
   fi
   
-  if [[ -z "$2" ]] ; then
+  if [[ -z "$2" ]] || [[ "$2" == "no" ]] ; then
     _info "Use default length 2048"
     length=2048
   fi
@@ -278,7 +295,7 @@ createDomainKey() {
   domain=$1
   length=$2
   isec=""
-  if [[ "$length" == "ec-"* ]] ; then
+  if _startswith "$length" "ec-" ; then
     isec="1"
     length=$(printf $length | cut -d '-' -f 2-100)
     eccname="$length"
@@ -578,14 +595,14 @@ _setopt() {
 
   if grep -H -n "^$__opt$__sep" "$__conf" > /dev/null ; then
     _debug2 OK
-    if [[ "$__val" == *"&"* ]] ; then
+    if _contains "$__val" "&" ; then
       __val="$(echo $__val | sed 's/&/\\&/g')"
     fi
     text="$(cat $__conf)"
     echo "$text" | sed "s|^$__opt$__sep.*$|$__opt$__sep$__val$__end|" > "$__conf"
 
   elif grep -H -n "^#$__opt$__sep" "$__conf" > /dev/null ; then
-    if [[ "$__val" == *"&"* ]] ; then
+    if _contains "$__val" "&" ; then
       __val="$(echo $__val | sed 's/&/\\&/g')"
     fi
     text="$(cat $__conf)"
@@ -685,8 +702,10 @@ _initpath() {
   
   _DEFAULT_ACCOUNT_CONF_PATH="$LE_WORKING_DIR/account.conf"
 
-  if [[ -f "$_DEFAULT_ACCOUNT_CONF_PATH" ]] ; then
-    source "$_DEFAULT_ACCOUNT_CONF_PATH"
+  if [[ -z "$ACCOUNT_CONF_PATH" ]] ; then
+    if [[ -f "$_DEFAULT_ACCOUNT_CONF_PATH" ]] ; then
+      source "$_DEFAULT_ACCOUNT_CONF_PATH"
+    fi
   fi
   
   if [[ -z "$ACCOUNT_CONF_PATH" ]] ; then
@@ -728,27 +747,33 @@ _initpath() {
   HTTP_HEADER="$LE_WORKING_DIR/http.header"
   
   WGET="wget -q"
-  if [[ "$DEBUG" -ge "2" ]] ; then
+  if [[ "$DEBUG" ]] && [[ "$DEBUG" -ge "2" ]] ; then
     WGET="$WGET -d "
   fi
 
   dp="$LE_WORKING_DIR/curl.dump"
   CURL="curl -L --silent"
-  if [[ "$DEBUG" -ge "2" ]] ; then
+  if [[ "$DEBUG" ]] && [[ "$DEBUG" -ge "2" ]] ; then
     CURL="$CURL -L --trace-ascii $dp "
+  fi
+
+  _DEFAULT_ACCOUNT_KEY_PATH="$LE_WORKING_DIR/account.key"
+  if [[ -z "$ACCOUNT_KEY_PATH" ]] ; then
+    ACCOUNT_KEY_PATH="$_DEFAULT_ACCOUNT_KEY_PATH"
   fi
   
   domain="$1"
-  
-  if [[ -z "$ACCOUNT_KEY_PATH" ]] ; then
-    ACCOUNT_KEY_PATH="$LE_WORKING_DIR/account.key"
-  fi
 
   if [[ -z "$domain" ]] ; then
     return 0
   fi
   
-  domainhome="$LE_WORKING_DIR/$domain"
+  _DEFAULT_CERT_HOME="$LE_WORKING_DIR"
+  if [[ -z "$CERT_HOME" ]] ; then
+    CERT_HOME="$_DEFAULT_CERT_HOME"
+  fi
+
+  domainhome="$CERT_HOME/$domain"
   mkdir -p "$domainhome"
 
   if [[ -z "$DOMAIN_PATH" ]] ; then
@@ -785,7 +810,7 @@ _initpath() {
 
 _apachePath() {
   httpdconfname="$(apachectl -V | grep SERVER_CONFIG_FILE= | cut -d = -f 2 | tr -d '"' )"
-  if [[ "$httpdconfname" == '/'* ]] ; then
+  if _startswith "$httpdconfname" '/' ; then
     httpdconf="$httpdconfname"
     httpdconfname="$(basename $httpdconfname)"
   else
@@ -815,10 +840,12 @@ _restoreApache() {
   fi
   
   cp -p "$APACHE_CONF_BACKUP_DIR/$httpdconfname" "$httpdconf"
+  _debug "Restored: $httpdconf."
   if ! apachectl  -t ; then
     _err "Sorry, restore apache config error, please contact me."
     return 1;
   fi
+  _debug "Restored successfully."
   rm -f "$APACHE_CONF_BACKUP_DIR/$httpdconfname"
   return 0  
 }
@@ -883,7 +910,7 @@ Allow from all
   return 0
 }
 
-_clearup () {
+_clearup() {
   _stopserver $serverproc
   serverproc=""
   _restoreApache
@@ -929,8 +956,19 @@ issue() {
   Le_ReloadCmd="$8"
   Le_RealFullChainPath="$9"
   
-  _initpath $Le_Domain
+  #remove these later.
+  if [[ "$Le_Webroot" == "dns-cf" ]] ; then
+    Le_Webroot="dns_cf"
+  fi
+  if [[ "$Le_Webroot" == "dns-dp" ]] ; then
+    Le_Webroot="dns_dp"
+  fi
+  if [[ "$Le_Webroot" == "dns-cx" ]] ; then
+    Le_Webroot="dns_cx"
+  fi
   
+  _initpath $Le_Domain
+
   if [[ -f "$DOMAIN_CONF" ]] ; then
     Le_NextRenewTime=$(grep "^Le_NextRenewTime=" "$DOMAIN_CONF" | cut -d '=' -f 2)
     if [[ -z "$FORCE" ]] && [[ "$Le_NextRenewTime" ]] && [[ "$(date -u "+%s" )" -lt "$Le_NextRenewTime" ]] ; then 
@@ -972,9 +1010,9 @@ issue() {
   fi
 
   
-  if [[ "$Le_Webroot" == *"no"* ]] ; then
+  if _contains "$Le_Webroot" "no" ; then
     _info "Standalone mode."
-    if ! command -v "nc" > /dev/null ; then
+    if ! _exists "nc" ; then
       _err "Please install netcat(nc) tools first."
       return 1
     fi
@@ -993,12 +1031,11 @@ issue() {
     fi
   fi
   
-  if [[ "$Le_Webroot" == *"apache"* ]] ; then
+  if _contains "$Le_Webroot" "apache" ; then
     if ! _setApache ; then
       _err "set up apache error. Report error to me."
       return 1
     fi
-    wellknown_path="$ACME_DIR"
   else
     usingApache=""
   fi
@@ -1006,11 +1043,17 @@ issue() {
   if [[ ! -f "$ACCOUNT_KEY_PATH" ]] ; then
     if ! createAccountKey $Le_Domain $Le_Keylength ; then
       _err "Create account key error."
+      if [[ "$usingApache" ]] ; then
+        _restoreApache
+      fi
       return 1
     fi
   fi
   
   if ! _calcjwk "$ACCOUNT_KEY_PATH" ; then
+    if [[ "$usingApache" ]] ; then
+        _restoreApache
+    fi
     return 1
   fi
   
@@ -1046,12 +1089,14 @@ issue() {
   if [[ ! -f "$CERT_KEY_PATH" ]] ; then
     if ! createDomainKey $Le_Domain $Le_Keylength ; then 
       _err "Create domain key error."
+      _clearup
       return 1
     fi
   fi
   
   if ! createCSR  $Le_Domain  $Le_Alt ; then
     _err "Create CSR error."
+    _clearup
     return 1
   fi
 
@@ -1075,7 +1120,7 @@ issue() {
       let "_index+=1"
       
       vtype="$VTYPE_HTTP"
-      if [[ "$_currentRoot" == "dns"* ]] ; then
+      if _startswith "$_currentRoot" "dns" ; then
         vtype="$VTYPE_DNS"
       fi
       _info "Getting token for domain" $d
@@ -1155,7 +1200,7 @@ issue() {
             return 1
           fi
           
-          addcommand="$_currentRoot-add"
+          addcommand="${_currentRoot}_add"
           if ! _exists $addcommand ; then 
             _err "It seems that your api file is not correct, it must have a function named: $addcommand"
             return 1
@@ -1168,6 +1213,7 @@ issue() {
         )
         
         if [[ "$?" != "0" ]] ; then
+          _clearup
           return 1
         fi
         dnsadded='1'
@@ -1178,6 +1224,7 @@ issue() {
       _setopt "$DOMAIN_CONF"  "Le_Vlist" "=" "\"$vlist\""
       _debug "Dns record not added yet, so, save to $DOMAIN_CONF and exit."
       _err "Please add the TXT records to the domains, and retry again."
+      _clearup
       return 1
     fi
     
@@ -1213,6 +1260,7 @@ issue() {
         _info "Standalone mode server"
         _startserver "$keyauthorization" &
         if [[ "$?" != "0" ]] ; then
+          _clearup
           return 1
         fi
         serverproc="$!"
@@ -1220,19 +1268,21 @@ issue() {
         _debug serverproc $serverproc
 
       else
-        if [[ -z "$wellknown_path" ]] ; then
-          wellknown_path="$_currentRoot/.well-known/acme-challenge"
-        fi
-        _debug wellknown_path "$wellknown_path"
-        
-        if [[ ! -d "$_currentRoot/.well-known" ]] ; then 
-          removelevel='1'
-        elif [[ ! -d "$_currentRoot/.well-known/acme-challenge" ]] ; then 
-          removelevel='2'
+        if [[ "$_currentRoot" == "apache" ]] ; then
+          wellknown_path="$ACME_DIR"
         else
-          removelevel='3'
+          wellknown_path="$_currentRoot/.well-known/acme-challenge"
+          if [[ ! -d "$_currentRoot/.well-known" ]] ; then 
+            removelevel='1'
+          elif [[ ! -d "$_currentRoot/.well-known/acme-challenge" ]] ; then 
+            removelevel='2'
+          else
+            removelevel='3'
+          fi
         fi
-        
+
+        _debug wellknown_path "$wellknown_path"
+
         token="$(echo -e -n "$keyauthorization" | cut -d '.' -f 1)"
         _debug "writing token:$token to $wellknown_path/$token"
 
@@ -1363,7 +1413,7 @@ issue() {
   Le_CertCreateTimeStr=$(date -u )
   _setopt "$DOMAIN_CONF"  "Le_CertCreateTimeStr"  "="  "\"$Le_CertCreateTimeStr\""
   
-  if [[ ! "$Le_RenewalDays" ]] ; then
+  if [[ -z "$Le_RenewalDays" ]] || [[ "$Le_RenewalDays" -lt "0" ]] || [[ "$Le_RenewalDays" -gt "80" ]] ; then
     Le_RenewalDays=80
   fi
   
@@ -1412,7 +1462,7 @@ renewAll() {
   _initpath
   _info "renewAll"
   
-  for d in $(ls -F ${LE_WORKING_DIR}/ | grep [^.].*[.].*/$ ) ; do
+  for d in $(ls -F ${CERT_HOME}/ | grep [^.].*[.].*/$ ) ; do
     d=$(echo $d | cut -d '/' -f 1)
     _info "renew $d"
     
@@ -1663,6 +1713,7 @@ _initconf() {
 
 #ACCOUNT_EMAIL=aaa@aaa.com  # the account email used to register account.
 #ACCOUNT_KEY_PATH=\"/path/to/account.key\"
+#CERT_HOME=\"/path/to/cert/home\"
 
 #STAGE=1 # Use the staging api
 #FORCE=1 # Force to issue cert
@@ -1670,7 +1721,7 @@ _initconf() {
 
 #ACCOUNT_KEY_HASH=account key hash
 
-USER_AGENT=\"$DEFAULT_USER_AGENT\"
+USER_AGENT=\"$USER_AGENT\"
 
 #USER_PATH=""
 
@@ -1732,11 +1783,12 @@ _precheck() {
 }
 
 install() {
+
   if ! _initpath ; then
     _err "Install failed."
     return 1
   fi
-  
+
   if ! _precheck ; then
     _err "Pre-check failed, can not install."
     return 1
@@ -1760,7 +1812,7 @@ install() {
   fi
 
   _info "Installing to $LE_WORKING_DIR"
-  
+
   if ! mkdir -p "$LE_WORKING_DIR" ; then
     _err "Can not craete working dir: $LE_WORKING_DIR"
     return 1
@@ -1796,8 +1848,10 @@ install() {
     _info "No profile is found, you will need to go into $LE_WORKING_DIR to use $PROJECT_NAME"
   fi
 
-  mkdir -p $LE_WORKING_DIR/dnsapi
-  cp  dnsapi/* $LE_WORKING_DIR/dnsapi/
+  if [[ -d "dnsapi" ]] ; then
+    mkdir -p $LE_WORKING_DIR/dnsapi
+    cp  dnsapi/* $LE_WORKING_DIR/dnsapi/
+  fi
   
   #to keep compatible mv the .acc file to .key file 
   if [[ -f "$LE_WORKING_DIR/account.acc" ]] ; then
@@ -1807,13 +1861,19 @@ install() {
   if [[ ! -f "$ACCOUNT_CONF_PATH" ]] ; then
     _initconf
   fi
-  
-  _setopt "$_DEFAULT_ACCOUNT_CONF_PATH" "ACCOUNT_CONF_PATH" "=" "\"$ACCOUNT_CONF_PATH\""
 
   if [[ "$_DEFAULT_ACCOUNT_CONF_PATH" != "$ACCOUNT_CONF_PATH" ]] ; then
-    _setopt "$ACCOUNT_CONF_PATH" "ACCOUNT_CONF_PATH" "=" "\"$ACCOUNT_CONF_PATH\""
+    _setopt "$_DEFAULT_ACCOUNT_CONF_PATH" "ACCOUNT_CONF_PATH" "=" "\"$ACCOUNT_CONF_PATH\""
   fi
 
+  if [[ "$_DEFAULT_CERT_HOME" != "$CERT_HOME" ]] ; then
+    _saveaccountconf "CERT_HOME" "$CERT_HOME"
+  fi
+
+  if [[ "$_DEFAULT_ACCOUNT_KEY_PATH" != "$ACCOUNT_KEY_PATH" ]] ; then
+    _saveaccountconf "ACCOUNT_KEY_PATH" "$ACCOUNT_KEY_PATH"
+  fi
+  
   installcronjob
   
   _info OK
@@ -1875,7 +1935,7 @@ Parameters:
   --webroot, -w  /path/to/webroot   Specifies the web root folder for web root mode.
   --standalone                      Use standalone mode.
   --apache                          Use apache mode.
-  --dns [dns-cf|dns-dp|dns-cx|/path/to/api/file]   Use dns mode or dns api.
+  --dns [dns_cf|dns_dp|dns_cx|/path/to/api/file]   Use dns mode or dns api.
   
   --keylength, -k [2048]            Specifies the domain key length: 2048, 3072, 4096, 8192 or ec-256, ec-384.
   --accountkeylength, -ak [2048]    Specifies the account key length.
@@ -1890,7 +1950,12 @@ Parameters:
   --reloadcmd \"service nginx reload\" After issue/renew, it's used to reload the server.
 
   --accountconf                     Specifies a customized account config file.
-  --home                            Specifies the home dir for $PROJECT_NAME
+  --home                            Specifies the home dir for $PROJECT_NAME .
+  --certhome                        Specifies the home dir to save all the certs.
+  --useragent                       Specifies the user agent string. it will be saved for future use too.
+  --accountemail                    Specifies the account email for registering, Only valid for the '--install' command.
+  --accountkey                      Specifies the account key path, Only valid for the '--install' command.
+  --days                            Specifies the days to renew the cert when using '--issue' command. The max value is 80 days.
   
   "
 }
@@ -1935,7 +2000,12 @@ _process() {
   _fullchainpath="no"
   _reloadcmd="no"
   _password=""
-  while (( ${#} )); do
+  _accountconf=""
+  _useragent=""
+  _accountemail=""
+  _accountkey=""
+  _certhome=""
+  while [[ ${#} -gt 0 ]] ; do
     case "${1}" in
     
     --help|-h)
@@ -1993,7 +2063,7 @@ _process() {
     --domain|-d)
         _dvalue="$2"
         
-        if [[ -z "$_dvalue" ]] || [[ "$_dvalue" == "-"* ]] ; then
+        if [[ -z "$_dvalue" ]] || _startswith "$_dvalue" "-" ; then
           _err "'$_dvalue' is not a valid domain for parameter '$1'"
           return 1
         fi
@@ -2017,7 +2087,7 @@ _process() {
         STAGE="1"
         ;;
     --debug)
-        if [[ "$2" == "-"* ]] || [[ -z "$2" ]]; then
+        if [[ -z "$2" ]] || _startswith "$2" "-" ; then
           DEBUG="1"
         else
           DEBUG="$2"
@@ -2051,7 +2121,7 @@ _process() {
         ;;
     --dns)
         wvalue="dns"
-        if [[ "$2" != "-"* ]] ; then
+        if ! _startswith "$2" "-" ; then
           wvalue="$2"
           shift
         fi
@@ -2087,7 +2157,7 @@ _process() {
         _fullchainpath="$2"
         shift
         ;;
-    --reloadcmd)
+    --reloadcmd|--reloadCmd)
         _reloadcmd="$2"
         shift
         ;;
@@ -2096,14 +2166,39 @@ _process() {
         shift
         ;;
     --accountconf)
-        ACCOUNT_CONF_PATH="$2"
+        _accountconf="$2"
+        ACCOUNT_CONF_PATH="$_accountconf"
         shift
         ;;
     --home)
         LE_WORKING_DIR="$2"
         shift
         ;;
-        
+    --certhome)
+        _certhome="$2"
+        CERT_HOME="$_certhome"
+        shift
+        ;;        
+    --useragent)
+        _useragent="$2"
+        USER_AGENT="$_useragent"
+        shift
+        ;;
+    --accountemail )
+        _accountemail="$2"
+        ACCOUNT_EMAIL="$_accountemail"
+        shift
+        ;;
+    --accountkey )
+        _accountkey="$2"
+        ACCOUNT_KEY_PATH="$_accountkey"
+        shift
+        ;;
+    --days )
+        _days="$2"
+        Le_RenewalDays="$_days"
+        shift
+        ;;
     *)
         _err "Unknown parameter : $1"
         return 1
@@ -2155,6 +2250,14 @@ _process() {
     ;;
   esac
   
+  if [[ "$_useragent" ]] ; then
+    _saveaccountconf "USER_AGENT" "$_useragent"
+  fi
+  if [[ "$_accountemail" ]] ; then
+    _saveaccountconf "ACCOUNT_EMAIL" "$_accountemail"
+  fi
+ 
+
 }
 
 
@@ -2167,7 +2270,7 @@ fi
 if [[ -z "$1" ]] ; then
   showhelp
 else
-  if [[ "$1" == "-"* ]] ; then
+  if echo "$1" | grep "^-" >/dev/null 2>&1 ; then
     _process "$@"
   else
     "$@"
