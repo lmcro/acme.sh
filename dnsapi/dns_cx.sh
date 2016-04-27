@@ -69,7 +69,7 @@ existing_records() {
     return 1
   fi
   count=0
-  seg=$(printf "$response" | grep -o "{[^{]*host\":\"$_sub_domain[^}]*}")
+  seg=$(printf "$response" | grep -o "{[^{]*host\":\"$_sub_domain\"[^}]*}")
   _debug seg "$seg"
   if [ -z "$seg" ] ; then
     return 0
@@ -144,7 +144,7 @@ _get_root() {
       return 1;
     fi
 
-    if printf "$response" | grep "$h." ; then
+    if printf "$response" | grep "$h." >/dev/null ; then
       seg=$(printf "$response" | grep -o "{[^{]*$h\.[^}]*\}" )
       _debug seg "$seg"
       _domain_id=$(printf "$seg" | grep -o \"id\":\"[^\"]*\" | cut -d : -f 2 | tr -d \")
@@ -159,7 +159,7 @@ _get_root() {
       return 1
     fi
     p=$i
-    let "i+=1"
+    i=$(expr $i + 1)
   done
   return 1
 }

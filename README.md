@@ -1,35 +1,36 @@
 # An ACME Shell script: acme.sh
 - An ACME protocol client written purely in Shell (Unix shell) language.
-- It's `sh` compatible, not only `bash`.
 - Fully ACME protocol implementation.
 - Simple, powerful and very easy to use. You only need 3 minutes to learn.
-
+- Bash, dash and sh compatible. 
 - Simplest shell script for Let's Encrypt free certificate client.
 - Purely written in Shell with no dependencies on python or Let's Encrypt official client.
 - Just one script, to issue, renew and install your certificates automatically.
+- DOES NOT require `root/sudoer` access.
 
 It's probably the `easiest&smallest&smartest` shell script to automatically issue & renew the free certificates from Let's Encrypt.
 
-DOES NOT require `root/sudoer` access.
 
 Wiki: https://github.com/Neilpang/acme.sh/wiki
 
 #Tested OS
-1. Ubuntu [![](https://cdn.rawgit.com/Neilpang/letest/master/status/ubuntu-latest.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)
-2. Debian [![](https://cdn.rawgit.com/Neilpang/letest/master/status/debian-latest.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)
-3. CentOS [![](https://cdn.rawgit.com/Neilpang/letest/master/status/centos-latest.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)
-4. Windows (cygwin with curl, openssl and crontab included) [![](https://cdn.rawgit.com/Neilpang/letest/master/status/windows.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)
-5. FreeBSD [![](https://cdn.rawgit.com/Neilpang/letest/master/status/freebsd.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)
-6. pfsense with curl
-7. openSUSE [![](https://cdn.rawgit.com/Neilpang/letest/master/status/opensuse-latest.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)
-8. Alpine Linux [![](https://cdn.rawgit.com/Neilpang/letest/master/status/alpine-latest.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status) (with curl)
-9. Archlinux [![](https://cdn.rawgit.com/Neilpang/letest/master/status/base-archlinux.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)
-10. fedora [![](https://cdn.rawgit.com/Neilpang/letest/master/status/fedora-latest.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)
-11. Kali Linux [![](https://cdn.rawgit.com/Neilpang/letest/master/status/kalilinux-kali-linux-docker.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)
-12. Oracle Linux [![](https://cdn.rawgit.com/Neilpang/letest/master/status/oraclelinux-latest.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)
-13. Cloud Linux  https://github.com/Neilpang/le/issues/111
-14. Proxmox https://pve.proxmox.com/wiki/HTTPSCertificateConfiguration#Let.27s_Encrypt_using_le.sh
-
+| NO | Status| Platform|
+|----|-------|---------|
+|1|[![](https://cdn.rawgit.com/Neilpang/acmetest/master/status/ubuntu-latest.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)| Ubuntu
+|2|[![](https://cdn.rawgit.com/Neilpang/acmetest/master/status/debian-latest.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)| Debian
+|3|[![](https://cdn.rawgit.com/Neilpang/acmetest/master/status/centos-latest.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)|CentOS
+|4|[![](https://cdn.rawgit.com/Neilpang/acmetest/master/status/windows-cygwin.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)|Windows (cygwin with curl, openssl and crontab included)
+|5|[![](https://cdn.rawgit.com/Neilpang/acmetest/master/status/freebsd.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)|FreeBSD
+|6|[![](https://cdn.rawgit.com/Neilpang/acmetest/master/status/pfsense.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)|pfsense
+|7|[![](https://cdn.rawgit.com/Neilpang/acmetest/master/status/opensuse-latest.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)|openSUSE
+|8|[![](https://cdn.rawgit.com/Neilpang/acmetest/master/status/alpine-latest.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)|Alpine Linux (with curl)
+|9|[![](https://cdn.rawgit.com/Neilpang/acmetest/master/status/base-archlinux.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)|Archlinux
+|10|[![](https://cdn.rawgit.com/Neilpang/acmetest/master/status/fedora-latest.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)|fedora
+|11|[![](https://cdn.rawgit.com/Neilpang/acmetest/master/status/kalilinux-kali-linux-docker.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)|Kali Linux
+|12|[![](https://cdn.rawgit.com/Neilpang/acmetest/master/status/oraclelinux-latest.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)|Oracle Linux
+|13|[![](https://cdn.rawgit.com/Neilpang/acmetest/master/status/proxmox.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)| Proxmox https://pve.proxmox.com/wiki/HTTPSCertificateConfiguration#Let.27s_Encrypt_using_acme.sh
+|14|-----| Cloud Linux  https://github.com/Neilpang/le/issues/111
+|15|[![](https://cdn.rawgit.com/Neilpang/acmetest/master/status/openbsd.svg)](https://github.com/Neilpang/letest#here-are-the-latest-status)|OpenBSD
 
 For all build statuses, check our [daily build project](https://github.com/Neilpang/acmetest): 
 
@@ -56,7 +57,7 @@ Nothing will be broken during the process.
 
 ### 1. Install online:
 
-Check this project:https://github.com/Neilpang/get.acme.sh
+Check this project: https://github.com/Neilpang/get.acme.sh
 
 ```bash
 curl https://get.acme.sh | sh
@@ -83,11 +84,13 @@ cd ./acme.sh
 
 You `don't have to be root` then, although `it is recommended`.
 
+Advanced Installation:  https://github.com/Neilpang/acme.sh/wiki/How-to-install
+
 The installer will perform 3 actions:
 
 1. Create and copy `acme.sh` to your home dir (`$HOME`):  `~/.acme.sh/`.
 All certs will be placed in this folder.
-2. Create alia for: `acme.sh=~/.acme.sh/acme.sh`. 
+2. Create alias for: `acme.sh=~/.acme.sh/acme.sh`. 
 3. Create everyday cron job to check and renew the cert if needed.
 
 Cron entry example:
@@ -207,8 +210,6 @@ The cert will be `renewed every 80 days by default` (which is configurable). Onc
 # Use Standalone server to issue cert
 
 **(requires you be root/sudoer, or you have permission to listen tcp 80 port)**
-
-Same usage as above, just give `no` as `--webroot` or `-w`.
 
 The tcp `80` port **MUST** be free to listen, otherwise you will be prompted to free the `80` port and try again.
 
