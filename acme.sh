@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 
-VER=2.2.8
+VER=2.3.2
 
 PROJECT_NAME="acme.sh"
 
@@ -19,6 +19,10 @@ VTYPE_HTTP="http-01"
 VTYPE_DNS="dns-01"
 VTYPE_TLS="tls-sni-01"
 VTYPE_TLS2="tls-sni-02"
+
+MAX_RENEW=80
+
+DEFAULT_DNS_SLEEP=120
 
 W_TLS="tls"
 
@@ -161,8 +165,8 @@ _h2b() {
   if _exists let ; then
     uselet="1"
   fi
-  _debug uselet "$uselet"
-  _debug _URGLY_PRINTF "$_URGLY_PRINTF"
+  _debug2 uselet "$uselet"
+  _debug2 _URGLY_PRINTF "$_URGLY_PRINTF"
   while true ; do
     if [ -z "$_URGLY_PRINTF" ] ; then
       h="$(printf $hex | cut -c $i-$j)"
@@ -643,7 +647,14 @@ _post() {
       response="$($_CURL --user-agent "$USER_AGENT" -X $httpmethod -H "$_H1" -H "$_H2" -H "$_H3" -H "$_H4" --data "$body" "$url" )"
     fi
     _ret="$?"
-  else
+    if [ "$_ret" != "0" ] ; then
+      _err "Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: $_ret"
+      if [ "$DEBUG" ] && [ "$DEBUG" -ge "2" ] ; then
+        _err "Here is the curl dump log:"
+        _err "$(cat "$_CURL_DUMP")"
+      fi
+    fi
+  elif _exists "wget" ; then
     _debug "WGET" "$WGET"
     if [ "$needbase64" ] ; then
       if [ "$httpmethod"="POST" ] ; then
@@ -659,7 +670,13 @@ _post() {
       fi
     fi
     _ret="$?"
+    if [ "$_ret" != "0" ] ; then
+      _err "Please refer to https://www.gnu.org/software/wget/manual/html_node/Exit-Status.html for error code: $_ret" 
+    fi
     _sed_i "s/^ *//g" "$HTTP_HEADER"
+  else
+    _ret="$?"
+    _err "Neither curl nor wget is found, can not do $httpmethod."
   fi
   _debug "_ret" "$_ret"
   printf "%s" "$response"
@@ -680,7 +697,7 @@ _get() {
       $CURL    --user-agent "$USER_AGENT" -H "$_H1" -H "$_H2" -H "$_H3" -H "$_H4" $url
     fi
     ret=$?
-  else
+  elif _exists "wget" ; then
     _debug "WGET" "$WGET"
     if [ "$onlyheader" ] ; then
       $WGET --user-agent="$USER_AGENT" --header "$_H4" --header "$_H3" --header "$_H2" --header "$_H1" -S -O /dev/null $url 2>&1 | sed 's/^[ ]*//g'
@@ -688,6 +705,9 @@ _get() {
       $WGET --user-agent="$USER_AGENT" --header "$_H4" --header "$_H3" --header "$_H2" --header "$_H1"    -O - $url
     fi
     ret=$?
+  else
+    ret=$?
+    _err "Neither curl nor wget is found, can not do GET."
   fi
   _debug "ret" "$ret"
   return $ret
@@ -817,6 +837,19 @@ _cleardomainconf() {
   fi
 }
 
+#_readdomainconf   key
+_readdomainconf() {
+  key="$1"
+  if [ "$DOMAIN_CONF" ] ; then
+  (
+    eval $(grep "^$key *=" "$DOMAIN_CONF")
+    eval "printf \"%s\" \"\$$key\""
+  )
+  else
+    _err "DOMAIN_CONF is empty, can not read $key"
+  fi
+}
+
 #_saveaccountconf  key  value
 _saveaccountconf() {
   key="$1"
@@ -871,9 +904,23 @@ _stopserver(){
     return
   fi
 
-  _get "http://localhost:$Le_HTTPPort" >/dev/null 2>&1
-  _get "https://localhost:$Le_TLSPort" >/dev/null 2>&1
-
+  _debug2 "Le_HTTPPort" "$Le_HTTPPort"
+  if [ "$Le_HTTPPort" ] ; then
+    if [ "$DEBUG" ] ; then
+      _get "http://localhost:$Le_HTTPPort"
+    else
+      _get "http://localhost:$Le_HTTPPort" >/dev/null 2>&1
+    fi
+  fi
+  
+  _debug2 "Le_TLSPort" "$Le_TLSPort"
+  if [ "$Le_TLSPort" ] ; then
+    if [ "$DEBUG" ] ; then
+      _get "https://localhost:$Le_TLSPort"
+    else
+      _get "https://localhost:$Le_TLSPort" >/dev/null 2>&1
+    fi
+  fi
 }
 
 
@@ -912,6 +959,7 @@ _starttlsserver() {
   fi
   
   #start openssl
+  _debug "openssl s_server -cert \"$TLS_CERT\"  -key \"$TLS_KEY\" -accept $port -naccept 1 -tlsextdebug"
   if [ "$DEBUG" ] && [ "$DEBUG" -ge "2" ] ; then
     (printf "HTTP/1.1 200 OK\r\n\r\n$content" | openssl s_server -cert "$TLS_CERT"  -key "$TLS_KEY" -accept $port -naccept 1 -tlsextdebug ) &
   else
@@ -980,10 +1028,10 @@ _initpath() {
     WGET="$WGET -d "
   fi
 
-  dp="$LE_WORKING_DIR/curl.dump"
+  _CURL_DUMP="$LE_WORKING_DIR/curl.dump"
   CURL="curl -L --silent"
   if [ "$DEBUG" ] && [ "$DEBUG" -ge "2" ] ; then
-    CURL="$CURL --trace-ascii $dp "
+    CURL="$CURL --trace-ascii $_CURL_DUMP "
   fi
   
   if [ "$Le_Insecure" ] ; then
@@ -1057,18 +1105,23 @@ _initpath() {
 
 
 _apachePath() {
+  _APAHECTL="apachectl"
   if ! _exists apachectl ; then
-    _err "'apachecrl not found. It seems that apache is not installed, or you are not root user.'"
-    _err "Please use webroot mode to try again."
-    return 1
+    if _exists apache2ctl ; then
+       _APAHECTL="apache2ctl"
+    else
+      _err "'apachectl not found. It seems that apache is not installed, or you are not root user.'"
+      _err "Please use webroot mode to try again."
+      return 1
+    fi
   fi
-  httpdconfname="$(apachectl -V | grep SERVER_CONFIG_FILE= | cut -d = -f 2 | tr -d '"' )"
+  httpdconfname="$($_APAHECTL -V | grep SERVER_CONFIG_FILE= | cut -d = -f 2 | tr -d '"' )"
   _debug httpdconfname "$httpdconfname"
   if _startswith "$httpdconfname" '/' ; then
     httpdconf="$httpdconfname"
     httpdconfname="$(basename $httpdconfname)"
   else
-    httpdroot="$(apachectl -V | grep HTTPD_ROOT= | cut -d = -f 2 | tr -d '"' )"
+    httpdroot="$($_APAHECTL -V | grep HTTPD_ROOT= | cut -d = -f 2 | tr -d '"' )"
     _debug httpdroot "$httpdroot"
     httpdconf="$httpdroot/$httpdconfname"
     httpdconfname="$(basename $httpdconfname)"
@@ -1098,7 +1151,7 @@ _restoreApache() {
   
   cat "$APACHE_CONF_BACKUP_DIR/$httpdconfname" > "$httpdconf"
   _debug "Restored: $httpdconf."
-  if ! apachectl  -t >/dev/null 2>&1 ; then
+  if ! $_APAHECTL  -t >/dev/null 2>&1 ; then
     _err "Sorry, restore apache config error, please contact me."
     return 1;
   fi
@@ -1115,7 +1168,7 @@ _setApache() {
 
   #test the conf first
   _info "Checking if there is an error in the apache config file before starting."
-  _msg="$(apachectl  -t  2>&1 )"
+  _msg="$($_APAHECTL  -t  2>&1 )"
   if [ "$?" != "0" ] ; then
     _err "Sorry, apache config file has error, please fix it first, then try again."
     _err "Don't worry, there is nothing changed to your system."
@@ -1138,7 +1191,7 @@ _setApache() {
   
   #add alias
   
-  apacheVer="$(apachectl -V | grep "Server version:" | cut -d : -f 2 | cut -d " " -f 2 | cut -d '/' -f 2 )"
+  apacheVer="$($_APAHECTL -V | grep "Server version:" | cut -d : -f 2 | cut -d " " -f 2 | cut -d '/' -f 2 )"
   _debug "apacheVer" "$apacheVer"
   apacheMajer="$(echo "$apacheVer" | cut -d . -f 1)"
   apacheMinor="$(echo "$apacheVer" | cut -d . -f 2)"
@@ -1162,7 +1215,7 @@ Allow from all
   " >> "$httpdconf"
   fi
 
-  _msg="$(apachectl  -t  2>&1 )"
+  _msg="$($_APAHECTL  -t  2>&1 )"
   if [ "$?" != "0" ] ; then
     _err "Sorry, apache config error"
     if _restoreApache ; then
@@ -1178,8 +1231,8 @@ Allow from all
     chmod 755 "$ACME_DIR"
   fi
   
-  if ! apachectl  graceful ; then
-    _err "Sorry, apachectl  graceful error, please contact me."
+  if ! $_APAHECTL  graceful ; then
+    _err "Sorry, $_APAHECTL  graceful error, please contact me."
     _restoreApache
     return 1;
   fi
@@ -1207,17 +1260,23 @@ _clearupwebbroot() {
     return 0
   fi
   
+  _rmpath=""
   if [ "$2" = '1' ] ; then
-    _debug "remove $__webroot/.well-known"
-    rm -rf "$__webroot/.well-known"
+    _rmpath="$__webroot/.well-known"
   elif [ "$2" = '2' ] ; then
-    _debug "remove $__webroot/.well-known/acme-challenge"
-    rm -rf "$__webroot/.well-known/acme-challenge"
+    _rmpath="$__webroot/.well-known/acme-challenge"
   elif [ "$2" = '3' ] ; then
-    _debug "remove $__webroot/.well-known/acme-challenge/$3"
-    rm -rf "$__webroot/.well-known/acme-challenge/$3"
+    _rmpath="$__webroot/.well-known/acme-challenge/$3"
   else
     _debug "Skip for removelevel:$2"
+  fi
+  
+  if [ "$_rmpath" ] ; then
+    if [ "$DEBUG" ] ; then
+      _debug "Debugging, skip removing: $_rmpath"
+    else
+      rm -rf "$_rmpath"
+    fi
   fi
   
   return 0
@@ -1253,7 +1312,7 @@ issue() {
   _initpath $Le_Domain
 
   if [ -f "$DOMAIN_CONF" ] ; then
-    Le_NextRenewTime=$(grep "^Le_NextRenewTime=" "$DOMAIN_CONF" | cut -d '=' -f 2 | tr -d "'\"")
+    Le_NextRenewTime=$(_readdomainconf Le_NextRenewTime)
     _debug Le_NextRenewTime "$Le_NextRenewTime"
     if [ -z "$FORCE" ] && [ "$Le_NextRenewTime" ] && [ $(date -u "+%s" ) -lt $Le_NextRenewTime ] ; then 
       _info "Skip, Next renewal time is: $(grep "^Le_NextRenewTimeStr" "$DOMAIN_CONF" | cut -d '=' -f 2)"
@@ -1264,15 +1323,12 @@ issue() {
   _savedomainconf "Le_Domain"       "$Le_Domain"
   _savedomainconf "Le_Alt"          "$Le_Alt"
   _savedomainconf "Le_Webroot"      "$Le_Webroot"
-  _savedomainconf "Le_Keylength"    "$Le_Keylength"
   
+
   if [ "$Le_Alt" = "no" ] ; then
     Le_Alt=""
   fi
-  if [ "$Le_Keylength" = "no" ] ; then
-    Le_Keylength=""
-  fi
-  
+
   if _hasfield "$Le_Webroot" "no" ; then
     _info "Standalone mode."
     if ! _exists "nc" ; then
@@ -1368,7 +1424,13 @@ issue() {
     _info "Skip register account key"
   fi
 
-  if [ ! -f "$CERT_KEY_PATH" ] ; then
+  if [ "$Le_Keylength" = "no" ] ; then
+    Le_Keylength=""
+  fi
+  
+  _key=$(_readdomainconf Le_Keylength)
+  _debug "Read key length:$_key"
+  if [ ! -f "$CERT_KEY_PATH" ] || [ "$Le_Keylength" != "$_key" ] ; then
     if ! createDomainKey $Le_Domain $Le_Keylength ; then 
       _err "Create domain key error."
       _clearup
@@ -1376,6 +1438,9 @@ issue() {
     fi
   fi
   
+  _savedomainconf "Le_Keylength"    "$Le_Keylength"
+  
+
   if ! createCSR  $Le_Domain  $Le_Alt ; then
     _err "Create CSR error."
     _clearup
@@ -1529,7 +1594,7 @@ issue() {
   
   if [ "$dnsadded" = '1' ] ; then
     if [ -z "$Le_DNSSleep" ] ; then
-      Le_DNSSleep=60
+      Le_DNSSleep=$DEFAULT_DNS_SLEEP
     else
       _savedomainconf "Le_DNSSleep"  "$Le_DNSSleep"
     fi
@@ -1683,7 +1748,7 @@ issue() {
       fi
       
       if [ "$status" = "invalid" ] ; then
-         error="$(echo $response | tr -d "\r\n" | egrep -o '"error":{[^}]*}')"
+         error="$(echo $response | tr -d "\r\n" | egrep -o '"error":\{[^}]*}')"
          _debug2 error "$error"
          errordetail="$(echo $error |  grep -o '"detail": *"[^"]*"' | cut -d '"' -f 4)"
          _debug2 errordetail "$errordetail"
@@ -1691,6 +1756,11 @@ issue() {
            _err "$d:Verify error:$errordetail"
          else
            _err "$d:Verify error:$error"
+         fi
+         if [ "$DEBUG" ] ; then
+           if [ "$vtype" = "$VTYPE_HTTP" ] ; then
+             _get "http://$d/.well-known/acme-challenge/$token"
+           fi
          fi
         _clearupwebbroot "$_currentRoot" "$removelevel" "$token"
         _clearup
@@ -1766,8 +1836,8 @@ issue() {
   Le_CertCreateTimeStr=$(date -u )
   _savedomainconf  "Le_CertCreateTimeStr"  "$Le_CertCreateTimeStr"
   
-  if [ -z "$Le_RenewalDays" ] || [ "$Le_RenewalDays" -lt "0" ] || [ "$Le_RenewalDays" -gt "80" ] ; then
-    Le_RenewalDays=80
+  if [ -z "$Le_RenewalDays" ] || [ "$Le_RenewalDays" -lt "0" ] || [ "$Le_RenewalDays" -gt "$MAX_RENEW" ] ; then
+    Le_RenewalDays=$MAX_RENEW
   else
     _savedomainconf  "Le_RenewalDays"   "$Le_RenewalDays"
   fi
@@ -1783,16 +1853,10 @@ issue() {
   _savedomainconf  "Le_NextRenewTimeStr"  "$Le_NextRenewTimeStr"
 
 
-  _output="$(installcert $Le_Domain  "$Le_RealCertPath" "$Le_RealKeyPath" "$Le_RealCACertPath" "$Le_ReloadCmd" "$Le_RealFullChainPath" 2>&1)"
-  _ret="$?"
-  if [ "$_ret" = "9" ] ; then
-    #ignore the empty install error.
-    return 0
+  if [ "$Le_RealCertPath$Le_RealKeyPath$Le_RealCACertPath$Le_ReloadCmd$Le_RealFullChainPath" ] ; then
+    installcert $Le_Domain  "$Le_RealCertPath" "$Le_RealKeyPath" "$Le_RealCACertPath" "$Le_ReloadCmd" "$Le_RealFullChainPath"
   fi
-  if [ "$_ret" != "0" ] ; then
-    _err "$_output"
-    return 1
-  fi
+
 }
 
 renew() {
@@ -1966,10 +2030,6 @@ installcert() {
     fi
   fi
 
-  if [ "$_installed" = "0" ] ; then
-    _err "Nothing to install. You don't specify any parameter."
-    return 9
-  fi
 
 }
 
@@ -2156,20 +2216,25 @@ _initconf() {
   fi
 }
 
+# nocron
 _precheck() {
+  _nocron="$1"
+  
   if ! _exists "curl"  && ! _exists "wget"; then
     _err "Please install curl or wget first, we need to access http resources."
     return 1
   fi
   
-  if ! _exists "crontab" ; then
-    _err "It is recommended to install crontab first. try to install 'cron, crontab, crontabs or vixie-cron'."
-    _err "We need to set cron job to renew the certs automatically."
-    _err "Otherwise, your certs will not be able to be renewed automatically."
-    if [ -z "$FORCE" ] ; then
-      _err "Please add '--force' and try install again to go without crontab."
-      _err "./$PROJECT_ENTRY --install --force"
-      return 1
+  if [ -z "$_nocron" ] ; then
+    if ! _exists "crontab" ; then
+      _err "It is recommended to install crontab first. try to install 'cron, crontab, crontabs or vixie-cron'."
+      _err "We need to set cron job to renew the certs automatically."
+      _err "Otherwise, your certs will not be able to be renewed automatically."
+      if [ -z "$FORCE" ] ; then
+        _err "Please add '--force' and try install again to go without crontab."
+        _err "./$PROJECT_ENTRY --install --force"
+        return 1
+      fi
     fi
   fi
   
@@ -2243,14 +2308,18 @@ _installalias() {
 
 }
 
+# nocron
 install() {
-
+  _nocron="$1"
   if ! _initpath ; then
     _err "Install failed."
     return 1
   fi
-
-  if ! _precheck ; then
+  if [ "$_nocron" ] ; then
+    _debug "Skip install cron job"
+  fi
+  
+  if ! _precheck "$_nocron" ; then
     _err "Pre-check failed, can not install."
     return 1
   fi
@@ -2313,7 +2382,9 @@ install() {
     _saveaccountconf "ACCOUNT_KEY_PATH" "$ACCOUNT_KEY_PATH"
   fi
   
-  installcronjob
+  if [ -z "$_nocron" ] ; then
+    installcronjob
+  fi
 
   if [ -z "$NO_DETECT_SH" ] ; then
     #Modify shebang
@@ -2332,8 +2403,12 @@ install() {
   _info OK
 }
 
+# nocron
 uninstall() {
-  uninstallcronjob
+  _nocron="$1"
+  if [ -z "$_nocron" ] ; then
+    uninstallcronjob
+  fi
   _initpath
 
   _profile="$(_detect_profile)"
@@ -2380,6 +2455,7 @@ Commands:
   --version, -v            Show version info.
   --install                Install $PROJECT_NAME to your system.
   --uninstall              Uninstall $PROJECT_NAME, and uninstall the cron job.
+  --upgrade                Upgrade $PROJECT_NAME to the latest code from $PROJECT
   --issue                  Issue a cert.
   --installcert            Install the issued cert to apache/nginx or any other server.
   --renew, -r              Renew a cert.
@@ -2405,7 +2481,7 @@ Parameters:
   --tls                             Use standalone tls mode.
   --apache                          Use apache mode.
   --dns [dns_cf|dns_dp|dns_cx|/path/to/api/file]   Use dns mode or dns api.
-  --dnssleep  [60]                  The time in seconds to wait for all the txt records to take effect in dns api mode. Default 60 seconds.
+  --dnssleep  [$DEFAULT_DNS_SLEEP]                  The time in seconds to wait for all the txt records to take effect in dns api mode. Default $DEFAULT_DNS_SLEEP seconds.
   
   --keylength, -k [2048]            Specifies the domain key length: 2048, 3072, 4096, 8192 or ec-256, ec-384.
   --accountkeylength, -ak [2048]    Specifies the account key length.
@@ -2425,17 +2501,20 @@ Parameters:
   --useragent                       Specifies the user agent string. it will be saved for future use too.
   --accountemail                    Specifies the account email for registering, Only valid for the '--install' command.
   --accountkey                      Specifies the account key path, Only valid for the '--install' command.
-  --days                            Specifies the days to renew the cert when using '--issue' command. The max value is 80 days.
+  --days                            Specifies the days to renew the cert when using '--issue' command. The max value is $MAX_RENEW days.
   --httpport                        Specifies the standalone listening port. Only valid if the server is behind a reverse proxy or load balancer.
   --tlsport                         Specifies the standalone tls listening port. Only valid if the server is behind a reverse proxy or load balancer.
   --listraw                         Only used for '--list' command, list the certs in raw format.
-  --stopRenewOnError, -se           Only valid for '--renewall' command. Stop to renew all if one cert has error in renewal.
+  --stopRenewOnError, -se           Only valid for '--renewall' command. Stop if one cert has error in renewal.
   --insecure                        Do not check the server certificate, in some devices, the api server's certificate may not be trusted.
+  --nocron                          Only valid for '--install' command, which means: do not install the default cron job. In this case, the certs will not be renewed automatically.
   "
 }
 
+# nocron
 _installOnline() {
   _info "Installing from online archive."
+  _nocron="$1"
   if [ ! "$BRANCH" ] ; then
     BRANCH="master"
   fi
@@ -2447,31 +2526,47 @@ _installOnline() {
     _debug "Download error."
     return 1
   fi
+  (
   _info "Extracting $localname"
   tar xzf $localname
+  
   cd "$PROJECT_NAME-$BRANCH"
   chmod +x $PROJECT_ENTRY
-  if ./$PROJECT_ENTRY install ; then
+  if ./$PROJECT_ENTRY install "$_nocron" ; then
     _info "Install success!"
   fi
   
   cd ..
+  
   rm -rf "$PROJECT_NAME-$BRANCH"
   rm -f "$localname"
+  )
 }
 
+upgrade() {
+  if (
+    cd "$LE_WORKING_DIR"
+    _installOnline "nocron"
+  ) ; then
+    _info "Upgrade success!"
+    exit 0
+  else
+    _err "Upgrade failed!"
+    exit 1
+  fi
+}
 
 _process() {
   _CMD=""
   _domain=""
   _altdomains="no"
   _webroot=""
-  _keylength="no"
-  _accountkeylength="no"
-  _certpath="no"
-  _keypath="no"
-  _capath="no"
-  _fullchainpath="no"
+  _keylength=""
+  _accountkeylength=""
+  _certpath=""
+  _keypath=""
+  _capath=""
+  _fullchainpath=""
   _reloadcmd=""
   _password=""
   _accountconf=""
@@ -2485,6 +2580,7 @@ _process() {
   _listraw=""
   _stopRenewOnError=""
   _insecure=""
+  _nocron=""
   while [ ${#} -gt 0 ] ; do
     case "${1}" in
     
@@ -2501,6 +2597,9 @@ _process() {
         ;;
     --uninstall)
         _CMD="uninstall"
+        ;;
+    --upgrade)
+        _CMD="upgrade"
         ;;
     --issue)
         _CMD="issue"
@@ -2633,11 +2732,13 @@ _process() {
         
     --keylength|-k)
         _keylength="$2"
-        accountkeylength="$2"
+        if [ "$_accountkeylength" = "no" ] ; then
+          _accountkeylength="$2"
+        fi
         shift
         ;;
     --accountkeylength|-ak)
-        accountkeylength="$2"
+        _accountkeylength="$2"
         shift
         ;;
 
@@ -2720,6 +2821,9 @@ _process() {
         _insecure="1"
         Le_Insecure="$_insecure"
         ;;
+    --nocron)
+        _nocron="1"
+        ;;
     *)
         _err "Unknown parameter : $1"
         return 1
@@ -2729,10 +2833,14 @@ _process() {
     shift 1
   done
 
+  if [ "$DEBUG" ] ; then
+    version
+  fi
 
   case "${_CMD}" in
-    install) install ;;
-    uninstall) uninstall ;;
+    install) install "$_nocron" ;;
+    uninstall) uninstall "$_nocron" ;;
+    upgrade) upgrade ;;
     issue)
       issue  "$_webroot"  "$_domain" "$_altdomains" "$_keylength" "$_certpath" "$_keypath" "$_capath" "$_reloadcmd" "$_fullchainpath"
       ;;
