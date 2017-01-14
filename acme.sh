@@ -573,7 +573,7 @@ _createkey() {
 _is_idn() {
   _is_idn_d="$1"
   _debug2 _is_idn_d "$_is_idn_d"
-  _idn_temp=$(printf "%s" "$_is_idn_d" | tr -d '[0-9]' | tr -d '[a-z]' | tr -d '[A-Z]' | tr -d '.,-')
+  _idn_temp=$(printf "%s" "$_is_idn_d" | tr -d '0-9' | tr -d 'a-z' | tr -d 'A-Z' | tr -d '.,-')
   _debug2 _idn_temp "$_idn_temp"
   [ "$_idn_temp" ]
 }
@@ -2355,6 +2355,12 @@ __get_domain_new_authz() {
     if ! _send_signed_request "$API/acme/new-authz" "{\"resource\": \"new-authz\", \"identifier\": {\"type\": \"dns\", \"value\": \"$(_idn "$_gdnd")\"}}"; then
       _err "Can not get domain new authz."
       return 1
+    fi
+    if _contains "$response" "No registration exists matching provided key"; then
+      _err "It seems there is an error, but it's recovered now, please try again."
+      _err "If you see this message for a second time, please report bug: $(__green "$PROJECT")"
+      _clearcaconf "CA_KEY_HASH"
+      break
     fi
     if ! _contains "$response" "An error occurred while processing your request"; then
       _info "The new-authz request is ok."
@@ -4534,7 +4540,7 @@ _process() {
 
 if [ "$INSTALLONLINE" ]; then
   INSTALLONLINE=""
-  _installOnline $BRANCH
+  _installOnline
   exit
 fi
 
