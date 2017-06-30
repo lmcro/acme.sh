@@ -1,30 +1,28 @@
 #!/usr/bin/env sh
 
+#This is the vscale.io api wrapper for acme.sh
 #
-#AD_API_KEY="sdfsdfsdfljlbjkljlkjsdfoiwje"
+#Author: Alex Loban
+#Report Bugs here: https://github.com/LAV45/acme.sh
 
-#This is the Alwaysdata api wrapper for acme.sh
-#
-#Author: Paul Koppen
-#Report Bugs here: https://github.com/wpk-/acme.sh
-
-AD_API_URL="https://$AD_API_KEY:@api.alwaysdata.com/v1"
+#VSCALE_API_KEY="sdfsdfsdfljlbjkljlkjsdfoiwje"
+VSCALE_API_URL="https://api.vscale.io/v1"
 
 ########  Public functions #####################
 
 #Usage: dns_myapi_add   _acme-challenge.www.domain.com   "XKrxpRBosdIKFzxW_CT3KLZNf6q0HG9i01zxXp5CPBs"
-dns_ad_add() {
+dns_vscale_add() {
   fulldomain=$1
   txtvalue=$2
 
-  if [ -z "$AD_API_KEY" ]; then
-    AD_API_KEY=""
-    _err "You didn't specify the AD api key yet."
+  if [ -z "$VSCALE_API_KEY" ]; then
+    VSCALE_API_KEY=""
+    _err "You didn't specify the VSCALE api key yet."
     _err "Please create you key and try again."
     return 1
   fi
 
-  _saveaccountconf AD_API_KEY "$AD_API_KEY"
+  _saveaccountconf VSCALE_API_KEY "$VSCALE_API_KEY"
 
   _debug "First detect the root zone"
   if ! _get_root "$fulldomain"; then
@@ -35,18 +33,21 @@ dns_ad_add() {
   _debug _sub_domain "$_sub_domain"
   _debug _domain "$_domain"
 
-  _ad_tmpl_json="{\"domain\":$_domain_id,\"type\":\"TXT\",\"name\":\"$_sub_domain\",\"value\":\"$txtvalue\"}"
+  _vscale_tmpl_json="{\"type\":\"TXT\",\"name\":\"$_sub_domain.$_domain\",\"content\":\"$txtvalue\"}"
 
-  if _ad_rest POST "record/" "$_ad_tmpl_json" && [ -z "$response" ]; then
-    _info "txt record updated success."
-    return 0
+  if _vscale_rest POST "domains/$_domain_id/records/" "$_vscale_tmpl_json"; then
+    response=$(printf "%s\n" "$response" | _egrep_o "{\"error\": \".+\"" | cut -d : -f 2)
+    if [ -z "$response" ]; then
+      _info "txt record updated success."
+      return 0
+    fi
   fi
 
   return 1
 }
 
 #fulldomain txtvalue
-dns_ad_rm() {
+dns_vscale_rm() {
   fulldomain=$1
   txtvalue=$2
 
@@ -60,16 +61,16 @@ dns_ad_rm() {
   _debug _domain "$_domain"
 
   _debug "Getting txt records"
-  _ad_rest GET "record/?domain=$_domain_id&name=$_sub_domain"
+  _vscale_rest GET "domains/$_domain_id/records/"
 
   if [ -n "$response" ]; then
-    record_id=$(printf "%s\n" "$response" | _egrep_o "\"id\":\s*[0-9]+" | cut -d : -f 2 | tr -d " " | _head_n 1)
+    record_id=$(printf "%s\n" "$response" | _egrep_o "\"TXT\", \"id\": [0-9]+, \"name\": \"$_sub_domain.$_domain\"" | cut -d : -f 2 | tr -d ", \"name\"")
     _debug record_id "$record_id"
     if [ -z "$record_id" ]; then
       _err "Can not get record id to remove."
       return 1
     fi
-    if _ad_rest DELETE "record/$record_id/" && [ -z "$response" ]; then
+    if _vscale_rest DELETE "domains/$_domain_id/records/$record_id" && [ -z "$response" ]; then
       _info "txt record deleted success."
       return 0
     fi
@@ -91,7 +92,7 @@ _get_root() {
   i=2
   p=1
 
-  if _ad_rest GET "domain/"; then
+  if _vscale_rest GET "domains/"; then
     response="$(echo "$response" | tr -d "\n" | sed 's/{/\n&/g')"
     while true; do
       h=$(printf "%s" "$domain" | cut -d . -f $i-100)
@@ -119,7 +120,7 @@ _get_root() {
 }
 
 #method uri qstr data
-_ad_rest() {
+_vscale_rest() {
   mtd="$1"
   ep="$2"
   data="$3"
@@ -129,13 +130,14 @@ _ad_rest() {
 
   export _H1="Accept: application/json"
   export _H2="Content-Type: application/json"
+  export _H3="X-Token: ${VSCALE_API_KEY}"
 
   if [ "$mtd" != "GET" ]; then
     # both POST and DELETE.
     _debug data "$data"
-    response="$(_post "$data" "$AD_API_URL/$ep" "" "$mtd")"
+    response="$(_post "$data" "$VSCALE_API_URL/$ep" "" "$mtd")"
   else
-    response="$(_get "$AD_API_URL/$ep")"
+    response="$(_get "$VSCALE_API_URL/$ep")"
   fi
 
   if [ "$?" != "0" ]; then
