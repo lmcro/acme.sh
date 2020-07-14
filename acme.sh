@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 
-VER=2.8.6
+VER=2.8.7
 
 PROJECT_NAME="acme.sh"
 
@@ -47,8 +47,6 @@ VTYPE_ALPN="tls-alpn-01"
 LOCAL_ANY_ADDRESS="0.0.0.0"
 
 DEFAULT_RENEW=60
-
-DEFAULT_DNS_SLEEP=120
 
 NO_VALUE="no"
 
@@ -140,6 +138,8 @@ _NOTIFY_WIKI="https://github.com/acmesh-official/acme.sh/wiki/notify"
 
 _SUDO_WIKI="https://github.com/acmesh-official/acme.sh/wiki/sudo"
 
+_REVOKE_WIKI="https://github.com/acmesh-official/acme.sh/wiki/revokecert"
+
 _DNS_MANUAL_ERR="The dns manual mode can not renew automatically, you must issue it again manually. You'd better use the other modes instead."
 
 _DNS_MANUAL_WARN="It seems that you are using dns manual mode. please take care: $_DNS_MANUAL_ERR"
@@ -188,28 +188,28 @@ _dlg_versions() {
   if _exists "${ACME_OPENSSL_BIN:-openssl}"; then
     ${ACME_OPENSSL_BIN:-openssl} version 2>&1
   else
-    echo "$ACME_OPENSSL_BIN doesn't exists."
+    echo "$ACME_OPENSSL_BIN doesn't exist."
   fi
 
   echo "apache:"
   if [ "$_APACHECTL" ] && _exists "$_APACHECTL"; then
     $_APACHECTL -V 2>&1
   else
-    echo "apache doesn't exists."
+    echo "apache doesn't exist."
   fi
 
   echo "nginx:"
   if _exists "nginx"; then
     nginx -V 2>&1
   else
-    echo "nginx doesn't exists."
+    echo "nginx doesn't exist."
   fi
 
   echo "socat:"
   if _exists "socat"; then
     socat -V 2>&1
   else
-    _debug "socat doesn't exists."
+    _debug "socat doesn't exist."
   fi
 }
 
@@ -848,6 +848,14 @@ _json_encode() {
   echo "$_j_str" | _hex_dump | _lower_case | sed 's/0a/5c 6e/g' | tr -d ' ' | _h2b | tr -d "\r\n"
 }
 
+#from: http:\/\/  to http://
+_json_decode() {
+  _j_str="$(sed 's#\\/#/#g')"
+  _debug3 "_json_decode"
+  _debug3 "_j_str" "$_j_str"
+  echo "$_j_str"
+}
+
 #options file
 _sed_i() {
   options="$1"
@@ -995,7 +1003,7 @@ _sign() {
 
   _sign_openssl="${ACME_OPENSSL_BIN:-openssl} dgst -sign $keyfile "
 
-  if grep "BEGIN RSA PRIVATE KEY" "$keyfile" >/dev/null 2>&1; then
+  if grep "BEGIN RSA PRIVATE KEY" "$keyfile" >/dev/null 2>&1 || grep "BEGIN PRIVATE KEY" "$keyfile" >/dev/null 2>&1; then
     $_sign_openssl -$alg | _base64
   elif grep "BEGIN EC PRIVATE KEY" "$keyfile" >/dev/null 2>&1; then
     if ! _signedECText="$($_sign_openssl -sha$__ECC_KEY_LEN | ${ACME_OPENSSL_BIN:-openssl} asn1parse -inform DER)"; then
@@ -1006,8 +1014,32 @@ _sign() {
     fi
     _debug3 "_signedECText" "$_signedECText"
     _ec_r="$(echo "$_signedECText" | _head_n 2 | _tail_n 1 | cut -d : -f 4 | tr -d "\r\n")"
-    _debug3 "_ec_r" "$_ec_r"
     _ec_s="$(echo "$_signedECText" | _head_n 3 | _tail_n 1 | cut -d : -f 4 | tr -d "\r\n")"
+    if [ "$__ECC_KEY_LEN" -eq "256" ]; then
+      while [ "${#_ec_r}" -lt "64" ]; do
+         _ec_r="0${_ec_r}"
+      done    
+      while [ "${#_ec_s}" -lt "64" ]; do
+         _ec_s="0${_ec_s}"
+      done
+    fi
+    if [ "$__ECC_KEY_LEN" -eq "384" ]; then
+      while [ "${#_ec_r}" -lt "96" ]; do
+         _ec_r="0${_ec_r}"
+      done    
+      while [ "${#_ec_s}" -lt "96" ]; do
+         _ec_s="0${_ec_s}"
+      done
+    fi
+    if [ "$__ECC_KEY_LEN" -eq "512" ]; then
+      while [ "${#_ec_r}" -lt "132" ]; do
+         _ec_r="0${_ec_r}"
+      done    
+      while [ "${#_ec_s}" -lt "132" ]; do
+         _ec_s="0${_ec_s}"
+      done
+    fi
+    _debug3 "_ec_r" "$_ec_r"    
     _debug3 "_ec_s" "$_ec_s"
     printf "%s" "$_ec_r$_ec_s" | _h2b | _base64
   else
@@ -1166,9 +1198,8 @@ _createcsr() {
     _info "Multi domain" "$alt"
     printf -- "\nsubjectAltName=$alt" >>"$csrconf"
   fi
-  if [ "$Le_OCSP_Staple" ] || [ "$Le_OCSP_Stable" ]; then
+  if [ "$Le_OCSP_Staple" = "1" ]; then
     _savedomainconf Le_OCSP_Staple "$Le_OCSP_Staple"
-    _cleardomainconf Le_OCSP_Stable
     printf -- "\nbasicConstraints = CA:FALSE\n1.3.6.1.5.5.7.1.24=DER:30:03:02:01:05" >>"$csrconf"
   fi
 
@@ -1979,7 +2010,9 @@ _send_signed_request() {
       continue
     fi
     if [ "$ACME_VERSION" = "2" ]; then
-      if [ "$url" = "$ACME_NEW_ACCOUNT" ] || [ "$url" = "$ACME_REVOKE_CERT" ]; then
+      if [ "$url" = "$ACME_NEW_ACCOUNT" ]; then
+        protected="$JWK_HEADERPLACE_PART1$nonce\", \"url\": \"${url}$JWK_HEADERPLACE_PART2, \"jwk\": $jwk"'}'
+      elif [ "$url" = "$ACME_REVOKE_CERT" ] && [ "$keyfile" != "$ACCOUNT_KEY_PATH" ]; then
         protected="$JWK_HEADERPLACE_PART1$nonce\", \"url\": \"${url}$JWK_HEADERPLACE_PART2, \"jwk\": $jwk"'}'
       else
         protected="$JWK_HEADERPLACE_PART1$nonce\", \"url\": \"${url}$JWK_HEADERPLACE_PART2, \"kid\": \"${ACCOUNT_URL}\""'}'
@@ -2792,10 +2825,10 @@ _setApache() {
 
   apacheVer="$($_APACHECTL -V | grep "Server version:" | cut -d : -f 2 | cut -d " " -f 2 | cut -d '/' -f 2)"
   _debug "apacheVer" "$apacheVer"
-  apacheMajer="$(echo "$apacheVer" | cut -d . -f 1)"
+  apacheMajor="$(echo "$apacheVer" | cut -d . -f 1)"
   apacheMinor="$(echo "$apacheVer" | cut -d . -f 2)"
 
-  if [ "$apacheVer" ] && [ "$apacheMajer$apacheMinor" -ge "24" ]; then
+  if [ "$apacheVer" ] && [ "$apacheMajor$apacheMinor" -ge "24" ]; then
     echo "
 Alias /.well-known/acme-challenge  $ACME_DIR
 
@@ -3419,13 +3452,13 @@ _regAccount() {
   if [ "$ACME_VERSION" = "2" ]; then
     regjson='{"termsOfServiceAgreed": true}'
     if [ "$ACCOUNT_EMAIL" ]; then
-      regjson='{"contact": ["mailto: '$ACCOUNT_EMAIL'"], "termsOfServiceAgreed": true}'
+      regjson='{"contact": ["mailto:'$ACCOUNT_EMAIL'"], "termsOfServiceAgreed": true}'
     fi
   else
     _reg_res="$ACME_NEW_ACCOUNT_RES"
     regjson='{"resource": "'$_reg_res'", "terms-of-service-agreed": true, "agreement": "'$ACME_AGREEMENT'"}'
     if [ "$ACCOUNT_EMAIL" ]; then
-      regjson='{"resource": "'$_reg_res'", "contact": ["mailto: '$ACCOUNT_EMAIL'"], "terms-of-service-agreed": true, "agreement": "'$ACME_AGREEMENT'"}'
+      regjson='{"resource": "'$_reg_res'", "contact": ["mailto:'$ACCOUNT_EMAIL'"], "terms-of-service-agreed": true, "agreement": "'$ACME_AGREEMENT'"}'
     fi
   fi
 
@@ -3505,7 +3538,9 @@ updateaccount() {
 
   if [ "$ACME_VERSION" = "2" ]; then
     if [ "$ACCOUNT_EMAIL" ]; then
-      updjson='{"contact": ["mailto: '$ACCOUNT_EMAIL'"]}'
+      updjson='{"contact": ["mailto:'$ACCOUNT_EMAIL'"]}'
+    else
+      updjson='{"contact": []}'
     fi
   else
     # ACMEv1: Updates happen the same way a registration is done.
@@ -3518,6 +3553,7 @@ updateaccount() {
   _send_signed_request "$_accUri" "$updjson"
 
   if [ "$code" = '200' ]; then
+    echo "$response" >"$ACCOUNT_JSON_PATH"
     _info "account update success for $_accUri."
   else
     _info "Error. The account was not updated."
@@ -4020,7 +4056,7 @@ issue() {
       #for dns manual mode
       _savedomainconf "Le_OrderFinalize" "$Le_OrderFinalize"
 
-      _authorizations_seg="$(echo "$response" | _egrep_o '"authorizations" *: *\[[^\]*\]' | cut -d '[' -f 2 | tr -d ']' | tr -d '"')"
+      _authorizations_seg="$(echo "$response" | _json_decode | _egrep_o '"authorizations" *: *\[[^\[]*\]' | cut -d '[' -f 2 | tr -d ']' | tr -d '"')"
       _debug2 _authorizations_seg "$_authorizations_seg"
       if [ -z "$_authorizations_seg" ]; then
         _err "_authorizations_seg not found."
@@ -4086,17 +4122,17 @@ $_authorizations_map"
 
       if [ "$ACME_VERSION" = "2" ]; then
         _idn_d="$(_idn "$d")"
-        _candindates="$(echo "$_authorizations_map" | grep -i "^$_idn_d,")"
-        _debug2 _candindates "$_candindates"
-        if [ "$(echo "$_candindates" | wc -l)" -gt 1 ]; then
-          for _can in $_candindates; do
+        _candidates="$(echo "$_authorizations_map" | grep -i "^$_idn_d,")"
+        _debug2 _candidates "$_candidates"
+        if [ "$(echo "$_candidates" | wc -l)" -gt 1 ]; then
+          for _can in $_candidates; do
             if _startswith "$(echo "$_can" | tr '.' '|')" "$(echo "$_idn_d" | tr '.' '|'),"; then
-              _candindates="$_can"
+              _candidates="$_can"
               break
             fi
           done
         fi
-        response="$(echo "$_candindates" | sed "s/$_idn_d,//")"
+        response="$(echo "$_candidates" | sed "s/$_idn_d,//")"
         _debug2 "response" "$response"
         if [ -z "$response" ]; then
           _err "get to authz error."
@@ -4287,7 +4323,7 @@ $_authorizations_map"
 
   if [ "$dns_entries" ]; then
     if [ -z "$Le_DNSSleep" ]; then
-      _info "Let's check each dns records now. Sleep 20 seconds first."
+      _info "Let's check each DNS record now. Sleep 20 seconds first."
       _sleep 20
       if ! _check_dns_entries; then
         _err "check dns error."
@@ -4541,7 +4577,7 @@ $_authorizations_map"
     _savedomainconf "Le_LinkOrder" "$Le_LinkOrder"
 
     _link_cert_retry=0
-    _MAX_CERT_RETRY=5
+    _MAX_CERT_RETRY=30
     while [ "$_link_cert_retry" -lt "$_MAX_CERT_RETRY" ]; do
       if _contains "$response" "\"status\":\"valid\""; then
         _debug "Order status is valid."
@@ -4556,7 +4592,14 @@ $_authorizations_map"
         break
       elif _contains "$response" "\"processing\""; then
         _info "Order status is processing, lets sleep and retry."
-        _sleep 2
+        _retryafter=$(echo "$responseHeaders" | grep -i "^Retry-After *:" | cut -d : -f 2 | tr -d ' ' | tr -d '\r')
+        _debug "_retryafter" "$_retryafter"
+        if [ "$_retryafter" ]; then
+          _info "Retry after: $_retryafter"
+          _sleep $_retryafter
+        else
+          _sleep 2
+        fi
       else
         _err "Sign error, wrong status"
         _err "$response"
@@ -5447,6 +5490,7 @@ uninstallcronjob() {
 
 }
 
+#domain  isECC  revokeReason
 revoke() {
   Le_Domain="$1"
   if [ -z "$Le_Domain" ]; then
@@ -5455,7 +5499,10 @@ revoke() {
   fi
 
   _isEcc="$2"
-
+  _reason="$3"
+  if [ -z "$_reason" ]; then
+    _reason="0"
+  fi
   _initpath "$Le_Domain" "$_isEcc"
   if [ ! -f "$DOMAIN_CONF" ]; then
     _err "$Le_Domain is not a issued domain, skip."
@@ -5477,7 +5524,7 @@ revoke() {
   _initAPI
 
   if [ "$ACME_VERSION" = "2" ]; then
-    data="{\"certificate\": \"$cert\"}"
+    data="{\"certificate\": \"$cert\",\"reason\":$_reason}"
   else
     data="{\"resource\": \"revoke-cert\", \"certificate\": \"$cert\"}"
   fi
@@ -5496,7 +5543,7 @@ revoke() {
       fi
     fi
   else
-    _info "Domain key file doesn't exists."
+    _info "Domain key file doesn't exist."
   fi
 
   _info "Try account key."
@@ -6223,7 +6270,7 @@ Parameters:
   --stateless                       Use stateless mode, see: $_STATELESS_WIKI
   --apache                          Use apache mode.
   --dns [dns_cf|dns_dp|dns_cx|/path/to/api/file]   Use dns mode or dns api.
-  --dnssleep  [$DEFAULT_DNS_SLEEP]                  The time in seconds to wait for all the txt records to take effect in dns api mode. Default $DEFAULT_DNS_SLEEP seconds.
+  --dnssleep   300                  The time in seconds to wait for all the txt records to take effect in dns api mode. It's not necessary to use this by default, $PROJECT_NAME polls dns status automatically.
 
   --keylength, -k [2048]            Specifies the domain key length: 2048, 3072, 4096, 8192 or ec-256, ec-384, ec-521.
   --accountkeylength, -ak [2048]    Specifies the account key length: 2048, 3072, 4096
@@ -6286,6 +6333,7 @@ Parameters:
                                      0: Bulk mode. Send all the domain's notifications in one message(mail).
                                      1: Cert mode. Send a message for every single cert.
   --notify-hook   [hookname]        Set the notify hook
+  --revoke-reason [0-10]            The reason for '--revoke' command. See: $_REVOKE_WIKI
 
 "
 }
@@ -6318,7 +6366,7 @@ _installOnline() {
     if ./$PROJECT_ENTRY install "$_nocron" "" "$_noprofile"; then
       _info "Install success!"
       _initpath
-      _saveaccountconf "UPGRADE_HASH" "$(_getMasterHash)"
+      _saveaccountconf "UPGRADE_HASH" "$(_getUpgradeHash)"
     fi
 
     cd ..
@@ -6328,19 +6376,27 @@ _installOnline() {
   )
 }
 
-_getMasterHash() {
+_getRepoHash() {
+  _hash_path=$1
+  shift
+  _hash_url="https://api.github.com/repos/acmesh-official/$PROJECT_NAME/git/refs/$_hash_path"
+  _get $_hash_url | tr -d "\r\n" | tr '{},' '\n' | grep '"sha":' | cut -d '"' -f 4
+}
+
+_getUpgradeHash() {
   _b="$BRANCH"
   if [ -z "$_b" ]; then
     _b="master"
   fi
-  _hash_url="https://api.github.com/repos/acmesh-official/$PROJECT_NAME/git/refs/heads/$_b"
-  _get $_hash_url | tr -d "\r\n" | tr '{},' '\n' | grep '"sha":' | cut -d '"' -f 4
+  _hash=$(_getRepoHash "heads/$_b")
+  if [ -z "$_hash" ]; then _hash=$(_getRepoHash "tags/$_b"); fi
+  echo $_hash
 }
 
 upgrade() {
   if (
     _initpath
-    [ -z "$FORCE" ] && [ "$(_getMasterHash)" = "$(_readaccountconf "UPGRADE_HASH")" ] && _info "Already uptodate!" && exit 0
+    [ -z "$FORCE" ] && [ "$(_getUpgradeHash)" = "$(_readaccountconf "UPGRADE_HASH")" ] && _info "Already uptodate!" && exit 0
     export LE_WORKING_DIR
     cd "$LE_WORKING_DIR"
     _installOnline "nocron" "noprofile"
@@ -6453,6 +6509,7 @@ _process() {
   _notify_hook=""
   _notify_level=""
   _notify_mode=""
+  _revoke_reason=""
   while [ ${#} -gt 0 ]; do
     case "${1}" in
 
@@ -6925,6 +6982,14 @@ _process() {
         _notify_mode="$_nmode"
         shift
         ;;
+      --revoke-reason)
+        _revoke_reason="$2"
+        if _startswith "$_revoke_reason" "-"; then
+          _err "'$_revoke_reason' is not a integer for '$1'"
+          return 1
+        fi
+        shift
+        ;;
       *)
         _err "Unknown parameter : $1"
         return 1
@@ -7012,7 +7077,7 @@ _process() {
       renewAll "$_stopRenewOnError"
       ;;
     revoke)
-      revoke "$_domain" "$_ecc"
+      revoke "$_domain" "$_ecc" "$_revoke_reason"
       ;;
     remove)
       remove "$_domain" "$_ecc"
