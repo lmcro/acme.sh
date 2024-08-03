@@ -1,11 +1,13 @@
 #!/usr/bin/env sh
-
-#
-#LOOPIA_User="username"
-#
-#LOOPIA_Password="password"
-#
-#LOOPIA_Api="https://api.loopia.<TLD>/RPCSERV"
+# shellcheck disable=SC2034
+dns_loopia_info='Loopia.se
+Site: Loopia.se
+Docs: github.com/acmesh-official/acme.sh/wiki/dnsapi#dns_loopia
+Options:
+ LOOPIA_Api API URL. E.g. "https://api.loopia.<TLD>/RPCSERV" where the <TLD> is one of: com, no, rs, se. Default: "se".
+ LOOPIA_User Username
+ LOOPIA_Password Password
+'
 
 LOOPIA_Api_Default="https://api.loopia.se/RPCSERV"
 
@@ -107,7 +109,7 @@ _loopia_load_config() {
   fi
 
   if _contains "$LOOPIA_Password" "'" || _contains "$LOOPIA_Password" '"'; then
-    _err "Password contains quoute or double quoute and this is not supported by dns_loopia.sh"
+    _err "Password contains a quotation mark or double quotation marks and this is not supported by dns_loopia.sh"
     return 1
   fi
 
